@@ -224,8 +224,8 @@
   ::-webkit-scrollbar{width:0px;}
   @media print{
     body *{visibility:hidden;}
-    #invoiceViewArea, #invoiceViewArea *{visibility:visible;}
-    #invoiceViewArea{position:absolute; top:0; left:0; width:100%;}
+    #invoiceViewArea, #invoiceViewArea *, #quoteViewArea, #quoteViewArea *{visibility:visible;}
+    #invoiceViewArea, #quoteViewArea{position:absolute; top:0; left:0; width:100%;}
   }
 </style>
 </head>
@@ -759,7 +759,8 @@ function stepReview(){
     </div>
     <p class="hint" style="margin-top:10px;">Este es un estimado. Ajusta tu precio según tu mercado local, tus costos y las metas de tu negocio.</p>
 
-    <button class="btn-primary" data-action="save-quote">💾 Guardar cotización</button>
+    <button class="btn-primary" data-action="save-and-invoice">🧾 Guardar y crear factura</button>
+    <button class="btn-secondary" data-action="save-quote">💾 Solo guardar cotización</button>
     <button class="btn-secondary" data-action="wz-back">← Editar</button>
   `;
 }
@@ -839,23 +840,45 @@ function renderInvoicesHistory(){
 function renderQuoteView(){
   const q = DB.quotes.find(x=>x.id===VIEW_QUOTE_ID);
   if(!q) return '';
+  const biz = DB.settings.business;
   return `
     <button class="btn-ghost" data-action="close-view">← Volver</button>
-    <p class="section-title">Cotización ${q.number}</p>
-    <div class="card">
-      <div class="summary-row"><span class="muted">Cliente</span><span>${escapeHtml(q.clientSnapshot.name)}</span></div>
-      <div class="summary-row"><span class="muted">Fecha de servicio</span><span>${q.serviceDate}</span></div>
-      ${q.lineItems.map(li=>`<div class="summary-row"><span class="muted">${escapeHtml(li.label)}</span><span>${fmt(li.amount)}</span></div>`).join('')}
-      <div class="summary-row"><span class="muted">Subtotal</span><span>${fmt(q.subtotal)}</span></div>
-      ${q.discountAmt>0?`<div class="summary-row"><span class="muted">Descuento</span><span>-${fmt(q.discountAmt)}</span></div>`:''}
-      ${q.taxAmt>0?`<div class="summary-row"><span class="muted">Impuesto</span><span>${fmt(q.taxAmt)}</span></div>`:''}
-      <div class="summary-row total"><span>Total</span><span>${fmt(q.total)}</span></div>
+    <div id="quoteViewArea">
+    <div class="invoice-paper" id="quotePaperView">
+      <div class="invoice-head">
+        <img src="${getLogoSrc()}" alt="logo">
+        <div class="biz"><strong>${escapeHtml(biz.name)}</strong><span>COTIZACIÓN / ESTIMATE</span></div>
+      </div>
+      <div class="invoice-meta">
+        <div><b>Cotización N°:</b> ${q.number}</div>
+        <div><b>Cliente:</b> ${escapeHtml(q.clientSnapshot.name)}</div>
+        <div><b>Fecha de servicio:</b> ${q.serviceDate}</div>
+      </div>
+      <table class="invoice-table"><thead><tr><th>Servicio</th><th class="num">Precio</th></tr></thead>
+      <tbody>${q.lineItems.map(li=>`<tr><td>${escapeHtml(li.label)}</td><td class="num">${fmt(li.amount)}</td></tr>`).join('')}</tbody></table>
+      <div style="margin-top:8px;">
+        <div class="summary-row"><span class="muted">Subtotal</span><span>${fmt(q.subtotal)}</span></div>
+        ${q.discountAmt>0?`<div class="summary-row"><span class="muted">Descuento</span><span>-${fmt(q.discountAmt)}</span></div>`:''}
+        ${q.taxAmt>0?`<div class="summary-row"><span class="muted">Impuesto</span><span>${fmt(q.taxAmt)}</span></div>`:''}
+        <div class="summary-row total"><span>Total</span><span>${fmt(q.total)}</span></div>
+      </div>
+      <div class="invoice-foot">
+        <div class="tag">${escapeHtml(biz.tagline||'')}</div>
+        <div>Esta es una cotización, no una factura. Responde para confirmar.</div>
+      </div>
+    </div>
     </div>
     <label class="field-label">Estado</label>
     <select id="quoteStatusSelect" data-quote-status="${q.id}">
       ${['draft','sent','accepted','declined'].map(s=>`<option value="${s}" ${q.status===s?'selected':''}>${statusLabel(s)}</option>`).join('')}
     </select>
-    ${q.status==='accepted' && !q.convertedInvoiceId ? `<button class="btn-primary" data-action="convert-invoice" data-id="${q.id}">🧾 Convertir en factura</button>` : ''}
+    <p class="hint">Actualiza el estado tú misma cuando el cliente te responda.</p>
+
+    <button class="btn-primary" data-action="whatsapp-quote" data-id="${q.id}">💬 Enviar por WhatsApp</button>
+    <button class="btn-secondary" data-action="share-quote" data-id="${q.id}">📷 Compartir / Descargar</button>
+    <button class="btn-secondary" data-action="print-quote">🖨️ Imprimir / PDF</button>
+
+    ${!q.convertedInvoiceId ? `<button class="btn-primary" data-action="convert-invoice" data-id="${q.id}">🧾 Crear factura y descargar</button>` : ''}
     ${q.convertedInvoiceId ? `<button class="btn-secondary" data-open="invoice" data-id="${q.convertedInvoiceId}">Ver factura generada →</button>` : ''}
   `;
 }
@@ -1163,28 +1186,57 @@ function bindWizardEvents(){
   };
   const saveQuoteBtn = root.querySelector('[data-action="save-quote"]');
   if(saveQuoteBtn) saveQuoteBtn.onclick=()=>{
-    if(!WZ.clientName || !WZ.clientName.trim()){ alert('Por favor ingresa el nombre del cliente antes de guardar.'); QUOTE_STEP=0; render(); return; }
-    let clientId = WZ.clientId;
-    if(!clientId){
-      clientId = uid();
-      DB.clients.push({id:clientId, name:WZ.clientName, phone:WZ.clientPhone, email:WZ.clientEmail, address:WZ.clientAddress, city:WZ.clientCity, state:WZ.state, zip:WZ.zip, notes:WZ.notes});
-    }
-    const calc = computeQuote(WZ);
-    const quote = {
-      id: uid(), number: nextQuoteNumber(), clientId,
-      clientSnapshot:{id:clientId, name:WZ.clientName, phone:WZ.clientPhone, email:WZ.clientEmail, address:WZ.clientAddress, city:WZ.clientCity, state:WZ.state, zip:WZ.zip},
-      serviceDate: WZ.serviceDate, createdAt: new Date().toISOString(),
-      input: JSON.parse(JSON.stringify(WZ)),
-      lineItems: calc.lineItems, subtotal: calc.subtotal, discPct: calc.discPct, discountAmt: calc.discountAmt,
-      taxPct: calc.taxPct, taxAmt: calc.taxAmt, total: calc.total,
-      costBreakdown: calc.costBreakdown, profit: calc.profit, margin: calc.margin,
-      status:'draft', convertedInvoiceId:null, notes: WZ.notes
-    };
-    DB.quotes.push(quote); saveDB();
-    WZ=null; QUOTE_STEP=0;
+    const quote = saveQuoteFromWizard();
+    if(!quote) return;
     VIEW_QUOTE_ID=quote.id; NAV='invoices';
     render();
   };
+  const saveInvoiceBtn = root.querySelector('[data-action="save-and-invoice"]');
+  if(saveInvoiceBtn) saveInvoiceBtn.onclick=()=>{
+    const quote = saveQuoteFromWizard();
+    if(!quote) return;
+    const inv = convertQuoteToInvoice(quote);
+    VIEW_QUOTE_ID=null; VIEW_INVOICE_ID=inv.id; NAV='invoices';
+    render();
+  };
+}
+
+function saveQuoteFromWizard(){
+  if(!WZ.clientName || !WZ.clientName.trim()){ alert('Por favor ingresa el nombre del cliente antes de guardar.'); QUOTE_STEP=0; render(); return null; }
+  let clientId = WZ.clientId;
+  if(!clientId){
+    clientId = uid();
+    DB.clients.push({id:clientId, name:WZ.clientName, phone:WZ.clientPhone, email:WZ.clientEmail, address:WZ.clientAddress, city:WZ.clientCity, state:WZ.state, zip:WZ.zip, notes:WZ.notes});
+  }
+  const calc = computeQuote(WZ);
+  const quote = {
+    id: uid(), number: nextQuoteNumber(), clientId,
+    clientSnapshot:{id:clientId, name:WZ.clientName, phone:WZ.clientPhone, email:WZ.clientEmail, address:WZ.clientAddress, city:WZ.clientCity, state:WZ.state, zip:WZ.zip},
+    serviceDate: WZ.serviceDate, createdAt: new Date().toISOString(),
+    input: JSON.parse(JSON.stringify(WZ)),
+    lineItems: calc.lineItems, subtotal: calc.subtotal, discPct: calc.discPct, discountAmt: calc.discountAmt,
+    taxPct: calc.taxPct, taxAmt: calc.taxAmt, total: calc.total,
+    costBreakdown: calc.costBreakdown, profit: calc.profit, margin: calc.margin,
+    status:'draft', convertedInvoiceId:null, notes: WZ.notes
+  };
+  DB.quotes.push(quote); saveDB();
+  WZ=null; QUOTE_STEP=0;
+  return quote;
+}
+
+function convertQuoteToInvoice(q){
+  const deposit = round2(q.total * (DB.settings.depositDefaultPct/100));
+  const inv = {
+    id: uid(), number: nextInvoiceNumber(), quoteId:q.id,
+    clientSnapshot: q.clientSnapshot, serviceDate:q.serviceDate,
+    lineItems:q.lineItems, subtotal:q.subtotal, discountAmt:q.discountAmt, taxAmt:q.taxAmt, total:q.total,
+    deposit, balanceDue: round2(q.total-deposit), status:'sent', createdAt:new Date().toISOString(), notes:q.notes
+  };
+  DB.invoices.push(inv);
+  const storedQuote = DB.quotes.find(x=>x.id===q.id);
+  if(storedQuote) storedQuote.convertedInvoiceId=inv.id;
+  saveDB();
+  return inv;
 }
 
 function bindClientEvents(){
@@ -1240,20 +1292,57 @@ function bindInvoiceHistoryEvents(){
   const convertBtn = root.querySelector('[data-action="convert-invoice"]');
   if(convertBtn) convertBtn.onclick=()=>{
     const q = DB.quotes.find(x=>x.id===convertBtn.dataset.id);
-    const deposit = round2(q.total * (DB.settings.depositDefaultPct/100));
-    const inv = {
-      id: uid(), number: nextInvoiceNumber(), quoteId:q.id,
-      clientSnapshot: q.clientSnapshot, serviceDate:q.serviceDate,
-      lineItems:q.lineItems, subtotal:q.subtotal, discountAmt:q.discountAmt, taxAmt:q.taxAmt, total:q.total,
-      deposit, balanceDue: round2(q.total-deposit), status:'sent', createdAt:new Date().toISOString(), notes:q.notes
-    };
-    DB.invoices.push(inv); q.convertedInvoiceId=inv.id; saveDB();
+    const inv = convertQuoteToInvoice(q);
     VIEW_QUOTE_ID=null; VIEW_INVOICE_ID=inv.id; render();
   };
   const printBtn = root.querySelector('[data-action="print-invoice"]');
   if(printBtn) printBtn.onclick=()=>{ try{ window.print(); }catch(e){ alert('No se pudo abrir el diálogo de impresión aquí. Abre esta página en Safari o Chrome e intenta de nuevo.'); } };
   const shareBtn = root.querySelector('[data-action="share-invoice"]');
   if(shareBtn) shareBtn.onclick=()=> shareInvoiceImage();
+
+  const printQuoteBtn = root.querySelector('[data-action="print-quote"]');
+  if(printQuoteBtn) printQuoteBtn.onclick=()=>{ try{ window.print(); }catch(e){ alert('No se pudo abrir el diálogo de impresión aquí. Abre esta página en Safari o Chrome e intenta de nuevo.'); } };
+  const shareQuoteBtn = root.querySelector('[data-action="share-quote"]');
+  if(shareQuoteBtn) shareQuoteBtn.onclick=()=> shareQuoteImage();
+  const waBtn = root.querySelector('[data-action="whatsapp-quote"]');
+  if(waBtn) waBtn.onclick=()=>{
+    const q = DB.quotes.find(x=>x.id===waBtn.dataset.id);
+    const text = buildQuoteWhatsAppText(q);
+    const digits = (q.clientSnapshot.phone||'').replace(/\D/g,'');
+    const url = digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+    if(q.status==='draft'){ q.status='sent'; saveDB(); render(); }
+  };
+}
+
+function buildQuoteWhatsAppText(q){
+  const biz = DB.settings.business;
+  const lines = q.lineItems.map(li=>`• ${li.label}: ${fmt(li.amount)}`).join('\n');
+  return `¡Hola ${q.clientSnapshot.name}! 👋 Aquí está tu cotización de ${biz.name} (N° ${q.number}):\n\n`+
+    `${lines}\n\n`+
+    (q.discountAmt>0?`Descuento: -${fmt(q.discountAmt)}\n`:'')+
+    `*Total: ${fmt(q.total)}*\n\n`+
+    `Fecha de servicio propuesta: ${q.serviceDate}\n\n`+
+    `Por favor responde *ACEPTO* para confirmar o *RECHAZO* si no te interesa. ¡Gracias! 💗`;
+}
+
+function shareQuoteImage(){
+  if(typeof html2canvas === 'undefined'){ alert('No se pudo cargar la herramienta de imagen. Abre esta página en Safari o Chrome e intenta de nuevo.'); return; }
+  const node = root.querySelector('#quotePaperView');
+  html2canvas(node, {scale:2, backgroundColor:'#ffffff', useCORS:true}).then(function(canvas){
+    canvas.toBlob(function(blob){
+      if(!blob){ alert('No se pudo generar la imagen.'); return; }
+      const file = new File([blob], 'cotizacion.png', {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        navigator.share({files:[file], title:'Cotización'}).catch(()=>{});
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link=document.createElement('a'); link.download='cotizacion.png'; link.href=url;
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    });
+  }).catch(()=>alert('No se pudo generar la imagen aquí. Abre esta página en Safari o Chrome e intenta de nuevo.'));
 }
 
 function shareInvoiceImage(){
