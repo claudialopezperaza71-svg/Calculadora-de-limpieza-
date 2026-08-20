@@ -1,7 +1,7 @@
 {
-  "name": "Mama & Me Cleaning Co. - Calculadora de Precios",
-  "short_name": "Mama & Me",
-  "description": "Calculadora de precios y facturas para Mama & Me Cleaning Co.",
+  "name": "Cleaning Price Calculator - Clean, Calculate, Grow",
+  "short_name": "Cleaning Calc",
+  "description": "Cleaning business pricing & quoting tool.",
   "start_url": ".",
   "display": "standalone",
   "orientation": "portrait",
